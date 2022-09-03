@@ -47,6 +47,11 @@ func AtDesiredReplicaCountsForCanary(ro *v1alpha1.Rollout, newRS, stableRS *apps
 	return true
 }
 
+// convert percentage to denominator
+func convertPercentageToDenominator(percent int32, denominator int32) int32 {
+	return (percent * denominator) / 100
+}
+
 // CalculateReplicaCountsForBasicCanary calculates the number of replicas for the newRS and the stableRS
 // when using the basic canary strategy. The function calculates the desired number of replicas for
 // the new and stable RS using the following equations:
@@ -86,26 +91,26 @@ func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, newRS *apps
 	rolloutSpecReplica := defaults.GetReplicasOrDefault(rollout.Spec.Replicas)
 	_, desiredWeight := GetCanaryReplicasOrWeight(rollout)
 	maxSurge := MaxSurge(rollout)
+	minCountAllowed := rolloutSpecReplica - MaxUnavailable(rollout)
+	maxCountAllowed := rolloutSpecReplica + maxSurge
 
-	desiredNewRSReplicaCount, desiredStableRSReplicaCount := approximateWeightedCanaryStableReplicaCounts(rolloutSpecReplica, desiredWeight, maxSurge)
+	goalCanaryCount, goalStableCount := approximateWeightedCanaryStableReplicaCounts2(rolloutSpecReplica, desiredWeight, maxSurge)
 
-	stableRSReplicaCount := int32(0)
-	newRSReplicaCount := int32(0)
+	currStepCanary := int32(0)
+	currStepStable := int32(0)
+
 	if newRS != nil {
-		newRSReplicaCount = *newRS.Spec.Replicas
+		currStepCanary = *newRS.Spec.Replicas
 	}
-
 	scaleStableRS := CheckStableRSExists(newRS, stableRS)
 	if scaleStableRS {
-		stableRSReplicaCount = *stableRS.Spec.Replicas
+		currStepStable = *stableRS.Spec.Replicas
 	} else {
 		// If there is no stableRS or it is the same as the newRS, then the rollout does not follow the canary steps.
 		// Instead the controller tries to get the newRS to 100% traffic.
-		desiredNewRSReplicaCount = rolloutSpecReplica
-		desiredStableRSReplicaCount = 0
+		goalCanaryCount = rolloutSpecReplica
+		goalStableCount = 0
 	}
-
-	maxReplicaCountAllowed := rolloutSpecReplica + maxSurge
 
 	allRSs := append(oldRSs, newRS)
 	if scaleStableRS {
@@ -113,61 +118,134 @@ func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, newRS *apps
 	}
 
 	totalCurrentReplicaCount := GetReplicaCountForReplicaSets(allRSs)
-	scaleUpCount := maxReplicaCountAllowed - totalCurrentReplicaCount
+	scaleUpLimit := maxCountAllowed - totalCurrentReplicaCount
 
-	if scaleStableRS && *stableRS.Spec.Replicas < desiredStableRSReplicaCount && scaleUpCount > 0 {
+	if scaleStableRS && *stableRS.Spec.Replicas < goalStableCount && scaleUpLimit > 0 {
 		// if the controller doesn't have to use every replica to achieve the desired count, it only scales up to the
 		// desired count.
-		if *stableRS.Spec.Replicas+scaleUpCount < desiredStableRSReplicaCount {
+		if *stableRS.Spec.Replicas+scaleUpLimit < goalStableCount {
 			// The controller is using every replica it can to get closer to desired state.
-			stableRSReplicaCount = *stableRS.Spec.Replicas + scaleUpCount
-			scaleUpCount = 0
+			currStepStable = *stableRS.Spec.Replicas + scaleUpLimit
+			scaleUpLimit = 0
 		} else {
-			stableRSReplicaCount = desiredStableRSReplicaCount
+			currStepStable = goalStableCount
 			// Calculating how many replicas were used to scale up to the desired count
-			scaleUpCount = scaleUpCount - (desiredStableRSReplicaCount - *stableRS.Spec.Replicas)
+			scaleUpLimit = scaleUpLimit - (goalStableCount - *stableRS.Spec.Replicas)
 		}
 	}
 
-	if newRS != nil && *newRS.Spec.Replicas < desiredNewRSReplicaCount && scaleUpCount > 0 {
+	if newRS != nil && *newRS.Spec.Replicas < goalCanaryCount && scaleUpLimit > 0 {
 		// This follows the same logic as scaling up the stable except with the newRS and it does not need to
 		// set the scaleDownCount again since it's not used again
-		if *newRS.Spec.Replicas+scaleUpCount < desiredNewRSReplicaCount {
-			newRSReplicaCount = *newRS.Spec.Replicas + scaleUpCount
-		} else {
-			newRSReplicaCount = desiredNewRSReplicaCount
-		}
+		currStepCanary = min(*newRS.Spec.Replicas+scaleUpLimit, goalCanaryCount)
 	}
 
 	if GetReplicaCountForReplicaSets(oldRSs) > 0 {
 		// If any older ReplicaSets exist, we should scale those down first, before even considering
 		// scaling down the newRS or stableRS
-		return newRSReplicaCount, stableRSReplicaCount
+		return currStepCanary, currStepStable
 	}
-
-	minAvailableReplicaCount := rolloutSpecReplica - MaxUnavailable(rollout)
 
 	// isIncreasing indicates if we are supposed to be increasing our canary replica count.
 	// If so, we can ignore pod availability of the stableRS. Otherwise, if we are reducing our
 	// weight (e.g. we are aborting), then we can ignore pod availability of the canaryRS.
-	isIncreasing := newRS == nil || desiredNewRSReplicaCount >= *newRS.Spec.Replicas
+	isIncreasing := newRS == nil || goalCanaryCount >= *newRS.Spec.Replicas
 	replicasToScaleDown := GetReplicasForScaleDown(newRS, !isIncreasing) + GetReplicasForScaleDown(stableRS, isIncreasing)
-	if replicasToScaleDown <= minAvailableReplicaCount {
+	if replicasToScaleDown <= minCountAllowed {
 		// Cannot scale down stableRS or newRS without going below min available replica count
-		return newRSReplicaCount, stableRSReplicaCount
+		return currStepCanary, currStepStable
 	}
 
-	scaleDownCount := replicasToScaleDown - minAvailableReplicaCount
+	scaleDownCount := replicasToScaleDown - minCountAllowed
 	if !isIncreasing {
 		// Skip scalingDown Stable replicaSet when Canary availability is not taken into calculation for scaleDown
-		newRSReplicaCount = calculateScaleDownReplicaCount(newRS, desiredNewRSReplicaCount, scaleDownCount, newRSReplicaCount)
-		newRSReplicaCount, stableRSReplicaCount = adjustReplicaWithinLimits(newRS, stableRS, newRSReplicaCount, stableRSReplicaCount, maxReplicaCountAllowed, minAvailableReplicaCount)
+		currStepCanary = calculateScaleDownReplicaCount(newRS, goalCanaryCount, scaleDownCount, currStepCanary)
+		currStepCanary, currStepStable = adjustReplicaWithinLimits(newRS, stableRS, currStepCanary, currStepStable, maxCountAllowed, minCountAllowed)
 	} else if scaleStableRS {
 		// Skip scalingDown canary replicaSet when StableSet availability is not taken into calculation for scaleDown
-		stableRSReplicaCount = calculateScaleDownReplicaCount(stableRS, desiredStableRSReplicaCount, scaleDownCount, stableRSReplicaCount)
-		stableRSReplicaCount, newRSReplicaCount = adjustReplicaWithinLimits(stableRS, newRS, stableRSReplicaCount, newRSReplicaCount, maxReplicaCountAllowed, minAvailableReplicaCount)
+		currStepStable = calculateScaleDownReplicaCount(stableRS, goalStableCount, scaleDownCount, currStepStable)
+		currStepStable, currStepCanary = adjustReplicaWithinLimits(stableRS, newRS, currStepStable, currStepCanary, maxCountAllowed, minCountAllowed)
 	}
-	return newRSReplicaCount, stableRSReplicaCount
+	return currStepCanary, currStepStable
+}
+
+func min(a, b int32) int32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// desiredWeight is a percentage, so we need to convert it to the closest fraction by specReplicas
+func approximateWeightedCanaryStableReplicaCounts2(specReplicas, desiredWeight, maxSurge int32) (int32, int32) {
+	if specReplicas == 0 {
+		return 0, 0
+	}
+
+	canary := int32(0)
+	total := int32(0) // 0 indicates first iteration
+	minDelta := 0.0
+	for n := specReplicas; n <= specReplicas+maxSurge; n++ {
+		point := scaledReplicaNumberFromPercent(desiredWeight, n)
+		d := distance(float64(desiredWeight*n)/100.0, point)
+
+		firstIteration := total == 0
+		betterDelta := d < minDelta
+		avoidingZeroReplicas := total == 1 // denominator 1 gives always 0 or 1, avoid it if there is option with den > 1
+		if firstIteration || betterDelta || avoidingZeroReplicas {
+			canary = point
+			total = n
+			minDelta = d
+		}
+		if d == 0 { // found exact point
+			break
+		}
+	}
+	return canary, total - canary
+}
+
+// scaledReplicaNumberFromPercent returns the closest point based on a percent in the interval [0, n]
+// Using the scaledValueFromPercent function. Avoiding return 0 and n if percentage not explicitly set to 0 or 100
+func scaledReplicaNumberFromPercent(percent, n int32) int32 {
+	p := scaledValueFromPercent(percent, n)
+	if n > 1 && 0 < percent && percent < 100 {
+		p = trim(p, 1, n-1)
+	}
+	return p
+}
+
+func trim(x, min, max int32) int32 {
+	if x < min {
+		return min
+	}
+	if x > max {
+		return max
+	}
+	return x
+}
+
+// scaledValueFromPercent returns the corresponding value for a percent in the interval [0, n]
+//
+// n - number of items total
+// 0              50            100%
+// |--|--|--|--|--|--|--|--|--|--|   percentages
+// 0      1       2      3       4
+// |------|-------|------|-------|   2nd coordinates (items)
+func scaledValueFromPercent(percent, total int32) int32 {
+	floor := percent * total / 100
+	mod := percent * total % 100
+	if mod > 0 {
+		ceil := floor + 1
+		x := float64(percent*total) / 100.0
+		if distance(x, ceil) <= distance(x, floor) {
+			return ceil
+		}
+	}
+	return floor
+}
+
+func distance(x float64, point int32) float64 {
+	return math.Abs(float64(point) - x)
 }
 
 // approximateWeightedCanaryStableReplicaCounts approximates the desired canary weight and returns
@@ -384,16 +462,7 @@ func BeforeStartingStep(rollout *v1alpha1.Rollout) bool {
 
 // CheckStableRSExists checks if the stableRS exists and is different than the newRS
 func CheckStableRSExists(newRS, stableRS *appsv1.ReplicaSet) bool {
-	if stableRS == nil {
-		return false
-	}
-	if newRS == nil {
-		return true
-	}
-	if newRS.Name == stableRS.Name {
-		return false
-	}
-	return true
+	return stableRS != nil && (newRS == nil || newRS.Name != stableRS.Name)
 }
 
 // GetReplicasForScaleDown returns the total number of replicas to consider for scaling down the
@@ -508,7 +577,7 @@ func UseSetCanaryScale(rollout *v1alpha1.Rollout) *v1alpha1.SetCanaryScale {
 }
 
 // GetOtherRSs the function goes through a list of ReplicaSets and returns a list of RS that are not the new or stable RS
-func GetOtherRSs(rollout *v1alpha1.Rollout, newRS, stableRS *appsv1.ReplicaSet, allRSs []*appsv1.ReplicaSet) []*appsv1.ReplicaSet {
+func GetOtherRSs(newRS, stableRS *appsv1.ReplicaSet, allRSs []*appsv1.ReplicaSet) []*appsv1.ReplicaSet {
 	otherRSs := []*appsv1.ReplicaSet{}
 	for _, rs := range allRSs {
 		if rs != nil {

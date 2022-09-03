@@ -704,27 +704,29 @@ func TestApproximateWeightedNewStableReplicaCounts(t *testing.T) {
 		expCanary int32
 		expStable int32
 	}{
-		{replicas: 0, weight: 0, maxSurge: 0, expCanary: 0, expStable: 0},   // 0%
-		{replicas: 0, weight: 50, maxSurge: 0, expCanary: 0, expStable: 0},  // 0%
-		{replicas: 0, weight: 100, maxSurge: 0, expCanary: 0, expStable: 0}, // 0%
+		//{replicas: 0, weight: 0, maxSurge: 0, expCanary: 0, expStable: 0},   // 0%
+		//{replicas: 0, weight: 50, maxSurge: 0, expCanary: 0, expStable: 0},  // 0%
+		//{replicas: 0, weight: 100, maxSurge: 0, expCanary: 0, expStable: 0}, // 0%
+		//
+		//{replicas: 0, weight: 0, maxSurge: 1, expCanary: 0, expStable: 0},   // 0%
+		//{replicas: 0, weight: 50, maxSurge: 1, expCanary: 0, expStable: 0},  // 0%
+		//{replicas: 0, weight: 100, maxSurge: 1, expCanary: 0, expStable: 0}, // 0%
+		//
+		//{replicas: 1, weight: 0, maxSurge: 0, expCanary: 0, expStable: 1},   // 0%
+		//{replicas: 1, weight: 1, maxSurge: 0, expCanary: 0, expStable: 1},   // 0%
+		//{replicas: 1, weight: 49, maxSurge: 0, expCanary: 0, expStable: 1},  // 0%
+		//{replicas: 1, weight: 50, maxSurge: 0, expCanary: 1, expStable: 0},  // 100%
+		//{replicas: 1, weight: 99, maxSurge: 0, expCanary: 1, expStable: 0},  // 100%
+		//{replicas: 1, weight: 100, maxSurge: 0, expCanary: 1, expStable: 0}, // 100%
 
-		{replicas: 0, weight: 0, maxSurge: 1, expCanary: 0, expStable: 0},   // 0%
-		{replicas: 0, weight: 50, maxSurge: 1, expCanary: 0, expStable: 0},  // 0%
-		{replicas: 0, weight: 100, maxSurge: 1, expCanary: 0, expStable: 0}, // 0%
+		//{replicas: 1, weight: 0, maxSurge: 1, expCanary: 0, expStable: 1},   // 0%
+		//{replicas: 1, weight: 1, maxSurge: 1, expCanary: 1, expStable: 1},   // 50%
+		//{replicas: 1, weight: 49, maxSurge: 1, expCanary: 1, expStable: 1},  // 50%
+		//{replicas: 1, weight: 50, maxSurge: 1, expCanary: 1, expStable: 1},  // 50%
+		//{replicas: 1, weight: 99, maxSurge: 1, expCanary: 1, expStable: 1},  // 50%
+		//{replicas: 1, weight: 100, maxSurge: 1, expCanary: 1, expStable: 0}, // 100%
 
-		{replicas: 1, weight: 0, maxSurge: 0, expCanary: 0, expStable: 1},   // 0%
-		{replicas: 1, weight: 1, maxSurge: 0, expCanary: 0, expStable: 1},   // 0%
-		{replicas: 1, weight: 49, maxSurge: 0, expCanary: 0, expStable: 1},  // 0%
-		{replicas: 1, weight: 50, maxSurge: 0, expCanary: 1, expStable: 0},  // 100%
-		{replicas: 1, weight: 99, maxSurge: 0, expCanary: 1, expStable: 0},  // 100%
-		{replicas: 1, weight: 100, maxSurge: 0, expCanary: 1, expStable: 0}, // 100%
-
-		{replicas: 1, weight: 0, maxSurge: 1, expCanary: 0, expStable: 1},   // 0%
-		{replicas: 1, weight: 1, maxSurge: 1, expCanary: 1, expStable: 1},   // 50%
-		{replicas: 1, weight: 49, maxSurge: 1, expCanary: 1, expStable: 1},  // 50%
-		{replicas: 1, weight: 50, maxSurge: 1, expCanary: 1, expStable: 1},  // 50%
-		{replicas: 1, weight: 99, maxSurge: 1, expCanary: 1, expStable: 1},  // 50%
-		{replicas: 1, weight: 100, maxSurge: 1, expCanary: 1, expStable: 0}, // 100%
+		{replicas: 1, weight: 35, maxSurge: 3, expCanary: 1, expStable: 2}, // 33%
 
 		{replicas: 2, weight: 0, maxSurge: 0, expCanary: 0, expStable: 2},   // 0%
 		{replicas: 2, weight: 1, maxSurge: 0, expCanary: 1, expStable: 1},   // 50%
@@ -752,16 +754,17 @@ func TestApproximateWeightedNewStableReplicaCounts(t *testing.T) {
 		{replicas: 3, weight: 49, maxSurge: 1, expCanary: 2, expStable: 2}, // 50%
 		{replicas: 3, weight: 50, maxSurge: 1, expCanary: 2, expStable: 2}, // 50%
 
-		{replicas: 10, weight: 0, maxSurge: 1, expCanary: 0, expStable: 10},   // 0%
+		{replicas: 10, weight: 0, maxSurge: 0, expCanary: 0, expStable: 10},   // 0%
 		{replicas: 10, weight: 1, maxSurge: 0, expCanary: 1, expStable: 9},    // 10%
 		{replicas: 10, weight: 14, maxSurge: 0, expCanary: 1, expStable: 9},   // 10%
 		{replicas: 10, weight: 15, maxSurge: 0, expCanary: 2, expStable: 8},   // 20%
 		{replicas: 10, weight: 16, maxSurge: 0, expCanary: 2, expStable: 8},   // 20%
 		{replicas: 10, weight: 99, maxSurge: 0, expCanary: 9, expStable: 1},   // 90%
-		{replicas: 10, weight: 100, maxSurge: 1, expCanary: 10, expStable: 0}, // 100%
+		{replicas: 10, weight: 100, maxSurge: 0, expCanary: 10, expStable: 0}, // 100%
 
 		{replicas: 10, weight: 0, maxSurge: 1, expCanary: 0, expStable: 10},   // 0%
 		{replicas: 10, weight: 1, maxSurge: 1, expCanary: 1, expStable: 10},   // 9.1%
+		{replicas: 10, weight: 14, maxSurge: 1, expCanary: 1, expStable: 9},   //
 		{replicas: 10, weight: 18, maxSurge: 1, expCanary: 2, expStable: 9},   // 18.1%
 		{replicas: 10, weight: 19, maxSurge: 1, expCanary: 2, expStable: 9},   // 18.1%
 		{replicas: 10, weight: 20, maxSurge: 1, expCanary: 2, expStable: 8},   // 20%
@@ -775,12 +778,48 @@ func TestApproximateWeightedNewStableReplicaCounts(t *testing.T) {
 	for i := range tests {
 		test := tests[i]
 		t.Run(fmt.Sprintf("%s_replicas:%d_weight:%d_surge:%d", t.Name(), test.replicas, test.weight, test.maxSurge), func(t *testing.T) {
-			newRSReplicaCount, stableRSReplicaCount := approximateWeightedCanaryStableReplicaCounts(test.replicas, test.weight, test.maxSurge)
+			newRSReplicaCount, stableRSReplicaCount := approximateWeightedCanaryStableReplicaCounts2(test.replicas, test.weight, test.maxSurge)
 			assert.Equal(t, test.expCanary, newRSReplicaCount, "check canary replica count")
 			assert.Equal(t, test.expStable, stableRSReplicaCount, "check stable replica count")
 		})
 	}
 }
+
+func TestIntStr(t *testing.T) {
+	ios := intstr.IntOrString{Type: intstr.String, StrVal: "40"}
+	p, _ := intstr.GetValueFromIntOrPercent(&ios, 8, false)
+	println(p)
+}
+
+func TestClosestPoint2(t *testing.T) {
+	tests := []struct {
+		percent  int32
+		points   int32
+		expected int32
+	}{
+		{percent: 0, points: 0, expected: 0},
+
+		{percent: 0, points: 4, expected: 0},
+		{percent: 1, points: 4, expected: 1},
+		{percent: 12, points: 4, expected: 1},
+		{percent: 13, points: 4, expected: 1},
+		{percent: 24, points: 4, expected: 1},
+		{percent: 25, points: 4, expected: 1},
+		{percent: 26, points: 4, expected: 1},
+		{percent: 37, points: 4, expected: 1},
+		{percent: 38, points: 4, expected: 2},
+		{percent: 99, points: 4, expected: 3},
+		{percent: 100, points: 4, expected: 4},
+	}
+	for i := range tests {
+		test := tests[i]
+		t.Run(fmt.Sprintf("%s_percent:%d_points:%d", t.Name(), test.percent, test.points), func(t *testing.T) {
+			p := scaledReplicaNumberFromPercent(test.percent, test.points)
+			assert.Equal(t, test.expected, p, "check closest point")
+		})
+	}
+}
+
 func TestCalculateReplicaCountsForNewDeployment(t *testing.T) {
 	rollout := newRollout(10, 10, intstr.FromInt(0), intstr.FromInt(1), "canary", "stable", nil, nil)
 	stableRS := newRS("stable", 10, 0)

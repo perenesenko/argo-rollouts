@@ -10,7 +10,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts"
 	smiclientset "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/split/clientset/versioned"
 	log "github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,6 +32,8 @@ import (
 	"k8s.io/kubectl/pkg/util/slice"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/utils/pointer"
+
+	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts"
 
 	"github.com/argoproj/argo-rollouts/controller/metrics"
 	register "github.com/argoproj/argo-rollouts/pkg/apis/rollouts"
@@ -454,7 +455,7 @@ func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutConte
 	newRS := replicasetutil.FindNewReplicaSet(rollout, rsList)
 	olderRSs := replicasetutil.FindOldReplicaSets(rollout, rsList, newRS)
 	stableRS := replicasetutil.GetStableRS(rollout, newRS, olderRSs)
-	otherRSs := replicasetutil.GetOtherRSs(rollout, newRS, stableRS, rsList)
+	otherRSs := replicasetutil.GetOtherRSs(newRS, stableRS, rsList)
 
 	exList, err := c.getExperimentsForRollout(rollout)
 	if err != nil {

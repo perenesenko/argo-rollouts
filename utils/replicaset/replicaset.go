@@ -280,7 +280,7 @@ func NewRSNewReplicas(rollout *v1alpha1.Rollout, allRSs []*appsv1.ReplicaSet, ne
 		stableRS := GetStableRS(rollout, newRS, allRSs)
 		var newRSReplicaCount int32
 		if rollout.Spec.Strategy.Canary.TrafficRouting == nil {
-			otherRSs := GetOtherRSs(rollout, newRS, stableRS, allRSs)
+			otherRSs := GetOtherRSs(newRS, stableRS, allRSs)
 			newRSReplicaCount, _ = CalculateReplicaCountsForBasicCanary(rollout, newRS, stableRS, otherRSs)
 		} else {
 			newRSReplicaCount, _ = CalculateReplicaCountsForTrafficRoutedCanary(rollout, weights)
