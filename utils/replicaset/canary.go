@@ -87,22 +87,21 @@ func convertPercentageToDenominator(percent int32, denominator int32) int32 {
 // replicas 1 currentWeight 5 NewRS 0 stableRS 1 max unavailable 0, surge 1 - should return newRS 1 stableRS 1
 // replicas 1 currentWeight 95 NewRS 0 stableRS 1 max unavailable 0, surge 1 - should return newRS 1 stableRS 1
 // For more examples, check the CalculateReplicaCountsForBasicCanary test in canary/canary_test.go
-func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, newRS *appsv1.ReplicaSet, stableRS *appsv1.ReplicaSet, oldRSs []*appsv1.ReplicaSet) (int32, int32) {
+func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, canaryRS *appsv1.ReplicaSet, stableRS *appsv1.ReplicaSet, oldRSs []*appsv1.ReplicaSet) (int32, int32) {
 	rolloutSpecReplica := defaults.GetReplicasOrDefault(rollout.Spec.Replicas)
 	_, desiredWeight := GetCanaryReplicasOrWeight(rollout)
-	maxSurge := MaxSurge(rollout)
-	minCountAllowed := rolloutSpecReplica - MaxUnavailable(rollout)
-	maxCountAllowed := rolloutSpecReplica + maxSurge
+	maxSurge := MaxSurge(rollout)                                    // v
+	minTotalReplicas := rolloutSpecReplica - MaxUnavailable(rollout) // v
+	maxTotalReplicas := rolloutSpecReplica + maxSurge                // v
 
-	goalCanaryCount, goalStableCount := approximateWeightedCanaryStableReplicaCounts2(rolloutSpecReplica, desiredWeight, maxSurge)
+	goalCanaryCount, goalStableCount := approximateWeightedCanaryStableReplicaCounts2(rolloutSpecReplica, desiredWeight, maxSurge) // v
 
-	currStepCanary := int32(0)
-	currStepStable := int32(0)
-
-	if newRS != nil {
-		currStepCanary = *newRS.Spec.Replicas
+	currStepCanary := int32(0) // v
+	if canaryRS != nil {
+		currStepCanary = *canaryRS.Spec.Replicas
 	}
-	scaleStableRS := CheckStableRSExists(newRS, stableRS)
+	scaleStableRS := CheckStableRSExists(canaryRS, stableRS)
+	currStepStable := int32(0) // v
 	if scaleStableRS {
 		currStepStable = *stableRS.Spec.Replicas
 	} else {
@@ -112,13 +111,13 @@ func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, newRS *apps
 		goalStableCount = 0
 	}
 
-	allRSs := append(oldRSs, newRS)
+	allRSs := append(oldRSs, canaryRS)
 	if scaleStableRS {
 		allRSs = append(allRSs, stableRS)
 	}
 
 	totalCurrentReplicaCount := GetReplicaCountForReplicaSets(allRSs)
-	scaleUpLimit := maxCountAllowed - totalCurrentReplicaCount
+	scaleUpLimit := maxTotalReplicas - totalCurrentReplicaCount
 
 	if scaleStableRS && *stableRS.Spec.Replicas < goalStableCount && scaleUpLimit > 0 {
 		// if the controller doesn't have to use every replica to achieve the desired count, it only scales up to the
@@ -134,10 +133,10 @@ func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, newRS *apps
 		}
 	}
 
-	if newRS != nil && *newRS.Spec.Replicas < goalCanaryCount && scaleUpLimit > 0 {
+	if canaryRS != nil && *canaryRS.Spec.Replicas < goalCanaryCount && scaleUpLimit > 0 {
 		// This follows the same logic as scaling up the stable except with the newRS and it does not need to
 		// set the scaleDownCount again since it's not used again
-		currStepCanary = min(*newRS.Spec.Replicas+scaleUpLimit, goalCanaryCount)
+		currStepCanary = min(*canaryRS.Spec.Replicas+scaleUpLimit, goalCanaryCount)
 	}
 
 	if GetReplicaCountForReplicaSets(oldRSs) > 0 {
@@ -147,24 +146,25 @@ func CalculateReplicaCountsForBasicCanary(rollout *v1alpha1.Rollout, newRS *apps
 	}
 
 	// isIncreasing indicates if we are supposed to be increasing our canary replica count.
-	// If so, we can ignore pod availability of the stableRS. Otherwise, if we are reducing our
-	// weight (e.g. we are aborting), then we can ignore pod availability of the canaryRS.
-	isIncreasing := newRS == nil || goalCanaryCount >= *newRS.Spec.Replicas
-	replicasToScaleDown := GetReplicasForScaleDown(newRS, !isIncreasing) + GetReplicasForScaleDown(stableRS, isIncreasing)
-	if replicasToScaleDown <= minCountAllowed {
+	// true - we can ignore pod availability of the stableRS.
+	// false (reducing the weight, e.g. aborting) - we can ignore pod availability of the canaryRS.
+	isIncreasing := canaryRS == nil || goalCanaryCount >= *canaryRS.Spec.Replicas
+	// ????
+	availableBothReplicasCount := GetReplicasForScaleDown(canaryRS, !isIncreasing) + GetReplicasForScaleDown(stableRS, isIncreasing)
+	if availableBothReplicasCount <= minTotalReplicas {
 		// Cannot scale down stableRS or newRS without going below min available replica count
 		return currStepCanary, currStepStable
 	}
 
-	scaleDownCount := replicasToScaleDown - minCountAllowed
+	scaleDownCount := availableBothReplicasCount - minTotalReplicas
 	if !isIncreasing {
 		// Skip scalingDown Stable replicaSet when Canary availability is not taken into calculation for scaleDown
-		currStepCanary = calculateScaleDownReplicaCount(newRS, goalCanaryCount, scaleDownCount, currStepCanary)
-		currStepCanary, currStepStable = adjustReplicaWithinLimits(newRS, stableRS, currStepCanary, currStepStable, maxCountAllowed, minCountAllowed)
+		currStepCanary = calculateScaleDownReplicaCount(canaryRS, goalCanaryCount, scaleDownCount, currStepCanary)
+		currStepCanary, currStepStable = adjustReplicaWithinLimits(canaryRS, stableRS, currStepCanary, currStepStable, maxTotalReplicas, minTotalReplicas)
 	} else if scaleStableRS {
 		// Skip scalingDown canary replicaSet when StableSet availability is not taken into calculation for scaleDown
 		currStepStable = calculateScaleDownReplicaCount(stableRS, goalStableCount, scaleDownCount, currStepStable)
-		currStepStable, currStepCanary = adjustReplicaWithinLimits(stableRS, newRS, currStepStable, currStepCanary, maxCountAllowed, minCountAllowed)
+		currStepStable, currStepCanary = adjustReplicaWithinLimits(stableRS, canaryRS, currStepStable, currStepCanary, maxTotalReplicas, minTotalReplicas)
 	}
 	return currStepCanary, currStepStable
 }
@@ -469,7 +469,7 @@ func CheckStableRSExists(newRS, stableRS *appsv1.ReplicaSet) bool {
 // given ReplicaSet. ignoreAvailability indicates if we are allowed to ignore availability
 // of pods during the calculation, in which case we return just the desired replicas.
 // The purpose of ignoring availability is to handle the case when the ReplicaSet which we are
-// considering for scaledown might be scaled up, but its pods may be unavailable (e.g. because of
+// considering for scale down might be scaled up, but its pods may be unavailable (e.g. because of
 // a CrashloopBackoff). In this case we need to return the spec.Replicas so that the controller will
 // still consider scaling down this ReplicaSet. Without this, a rollout could become stuck not
 // scaling down the stable, in order to make room for more canaries.
